@@ -1,0 +1,89 @@
+/* ============================================================
+   style.css — Estilos personalizados para la app de vigas
+   ============================================================ */
+
+/* Fuente y color base */
+html, body, [class*="css"] {
+    font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+/* Encabezado principal */
+h1 {
+    color: #1565C0;
+    border-bottom: 3px solid #1565C0;
+    padding-bottom: 0.3rem;
+}
+
+h2 {
+    color: #1565C0;
+}
+
+h3 {
+    color: #37474F;
+}
+
+/* Tarjetas de métricas */
+[data-testid="stMetric"] {
+    background-color: #F8F9FA;
+    border: 1px solid #E0E0E0;
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+    color: #546E7A;
+    font-size: 0.85rem;
+}
+
+[data-testid="stMetricValue"] {
+    color: #1565C0;
+    font-weight: 700;
+}
+
+/* Alertas — éxito */
+[data-testid="stAlert"][data-type="success"] {
+    border-left: 4px solid #2E7D32;
+}
+
+/* Alertas — error */
+[data-testid="stAlert"][data-type="error"] {
+    border-left: 4px solid #C62828;
+}
+
+/* Alertas — advertencia */
+[data-testid="stAlert"][data-type="warning"] {
+    border-left: 4px solid #F9A825;
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+    background-color: #F0F4FF;
+}
+
+[data-testid="stSidebar"] h2 {
+    font-size: 1rem;
+    color: #1565C0;
+}
+
+/* Tablas */
+[data-testid="stDataFrame"] {
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+/* Divisores */
+hr {
+    border-color: #CFD8DC;
+}
+
+/* Botones principales */
+[data-testid="stButton"] > button[kind="primary"] {
+    background-color: #1565C0;
+    color: white;
+    border-radius: 6px;
+    font-weight: 600;
+}
+
+[data-testid="stButton"] > button[kind="primary"]:hover {
+    background-color: #0D47A1;
+}
