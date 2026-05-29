@@ -187,34 +187,75 @@ def select_design_point(
     strategy: str = "max_e",
 ) -> Optional[Tuple[float, float, float]]:
     """
-    Seleciona o ponto de projeto (e, 1/Ps) na região viável.
+    Seleciona o ponto de projeto (e, 1/Ps) dentro da região viável.
 
-    Args:
-        strategy: 'max_e' | 'min_P' | 'centroid'
+    Convenção dos arrays:
+        lower[i] = cota inferior de 1/Ps em e_arr[i] (máximo Ps permitido)
+        upper[i] = cota superior de 1/Ps em e_arr[i] (mínimo Ps requerido)
+        → maior 1/Ps = menor Ps = mais econômico
+
+    Estratégias:
+        'max_e'    — maior excentricidade factível; nesse e, 1/Ps = upper (Ps mínimo).
+        'min_P'    — menor Ps globalmente: máximo de upper sobre todos os e válidos.
+        'centroid' — centroide ponderado pelo comprimento do intervalo [lower, upper].
 
     Returns:
-        (e_design, invPs_design, Ps_design) ou None.
+        (e_design, invPs_design, Ps_design) ou None se sem região viável.
     """
     if not np.any(valid):
         return None
 
     ve = e_arr[valid]
-    vl = lower[valid]
-    vu = upper[valid]
+    vl = lower[valid]   # cota inferior de 1/Ps (Ps máximo admissível)
+    vu = upper[valid]   # cota superior de 1/Ps (Ps mínimo necessário = mais econômico)
 
     if strategy == "max_e":
+        # Maior e na região factível
         idx = np.argmax(ve)
-        e_d    = ve[idx]
-        invP_d = (vl[idx] + vu[idx]) / 2.0
+        e_d = ve[idx]
+        # Nesse e: maior 1/Ps possível = limite superior = Ps mínimo
+        invP_d = vu[idx]
+
     elif strategy == "min_P":
-        mid = (vl + vu) / 2.0
-        idx = np.argmax(mid)
+        # Menor Ps globalmente = maior 1/Ps sobre todos os e válidos
+        idx = np.argmax(vu)
         e_d    = ve[idx]
-        invP_d = mid[idx]
+        invP_d = vu[idx]
+
     else:  # centroid
-        e_d = float(np.mean(ve))
-        i_c = np.argmin(np.abs(ve - e_d))
-        invP_d = (vl[i_c] + vu[i_c]) / 2.0
+        # Centroide ponderado pelo comprimento do intervalo [lower, upper]
+        larguras = vu - vl
+        total = float(np.sum(larguras))
+        if total > 1e-12:
+            e_d = float(np.sum(ve * larguras) / total)
+        else:
+            e_d = float(np.mean(ve))
+        # Interpolar lower e upper no e do centroide
+        lo_c = float(np.interp(e_d, ve, vl))
+        up_c = float(np.interp(e_d, ve, vu))
+        invP_d = (lo_c + up_c) / 2.0
 
     Ps = 1.0 / invP_d if invP_d > 1e-12 else None
     return float(e_d), float(invP_d), Ps
+
+
+def is_in_feasible_region(
+    e: float,
+    invPs: float,
+    e_arr: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> bool:
+    """
+    Verifica se o ponto (e, 1/Ps) está dentro da região viável.
+
+    Interpola os limites lower e upper no valor de e dado.
+
+    Returns:
+        True se lower(e) ≤ invPs ≤ upper(e), False caso contrário.
+    """
+    if e < e_arr[0] or e > e_arr[-1]:
+        return False
+    lo = float(np.interp(e, e_arr, lower))
+    up = float(np.interp(e, e_arr, upper))
+    return lo <= invPs <= up
