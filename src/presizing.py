@@ -3,10 +3,16 @@ presizing.py
 Pré-dimensionamento da seção transversal — Capítulo 6 do manual Torii (2020).
 NBR 6118:2014.
 
-Critério geral:  Eqs. 6.9 e 6.10 → módulos seccionais mínimos considerando
-                 diferença de momentos (serviço − η·peso próprio).
-Critério simpl.: Eq. 6.13      → módulo mínimo baseado somente no momento
-                 de serviço e no limite de compressão em serviço.
+Critério geral:  Eqs. 6.9 e 6.10 — módulos mínimos eliminando P e e das
+                 4 condições de tensão (ato e serviço).
+
+Derivação das fórmulas (seção simétrica zt = zb = z):
+  C1+C3 → zt_req = (Mse − η·Msw) / (η·ftt + |fsc|)   [fibra superior]
+  C2+C4 → zb_req = (Mse − η·Msw) / (fst + η·|ftc|)   [fibra inferior]
+
+Critério simpl.: Eq. 6.13 — z_req = Ms / |ftc|
+  Usa o limite de compressão no ato de transferência (|ftc| = 0,7·fckj),
+  mais restritivo que |fsc| quando fckj < fck.
 """
 import math
 
@@ -15,8 +21,14 @@ def presize_general(Mse: float, Msw: float, eta: float, limits) -> tuple:
     """
     Critério geral — Eqs. 6.9 e 6.10 do manual.
 
-    Combina as condições de serviço e do ato para determinar os módulos
-    seccionais mínimos independentemente de P e e.
+    Combina as condições de serviço (C1, C2) e do ato de transferência (C3, C4)
+    para determinar os módulos seccionais mínimos sem conhecer P nem e.
+
+    Derivação:
+      zt_req: combina C1 (σ_top_serv ≥ fsc) + C3 (σ_top_ato ≤ ftt)
+              zt ≥ delta_M / (η·ftt + |fsc|)
+      zb_req: combina C2 (σ_bot_serv ≤ fst) + C4 (σ_bot_ato ≥ ftc)
+              zb ≥ delta_M / (fst + η·|ftc|)
 
     Args:
         Mse:    momento total de serviço na seção crítica (kN·m, positivo)
@@ -27,23 +39,20 @@ def presize_general(Mse: float, Msw: float, eta: float, limits) -> tuple:
     Returns:
         (zt_req, zb_req) em m³ — módulos seccionais mínimos necessários.
     """
-    # Tensões limites em kPa (1 MPa = 1000 kPa = 1000 kN/m²)
-    ftt_kPa = limits.ftt * 1000.0   # > 0
-    ftc_kPa = limits.ftc * 1000.0   # < 0
-    fst_kPa = limits.fst * 1000.0   # ≥ 0
-    fsc_kPa = limits.fsc * 1000.0   # < 0
+    ftt_kPa = limits.ftt * 1000.0          # tracção no ato (> 0)
+    fst_kPa = limits.fst * 1000.0          # tracção em serviço (≥ 0)
+    ftc_abs_kPa = abs(limits.ftc) * 1000.0  # compressão no ato  (> 0)
+    fsc_abs_kPa = abs(limits.fsc) * 1000.0  # compressão em serviço (> 0)
 
     delta_M = max(Mse - eta * Msw, 0.0)
 
-    # Eq. 6.9 — fibra inferior (determinante para viga simplesmente apoiada)
-    # De: σ_bot_service ≥ fsc e σ_top_transfer ≤ ftt  → eliminando P e e
-    den_b = eta * ftt_kPa - fsc_kPa  # = η·ftt + |fsc| > 0
-    zb_req = delta_M / den_b if den_b > 1e-12 else 0.0
-
-    # Eq. 6.10 — fibra superior
-    # De: σ_top_service ≤ fst e σ_bot_transfer ≥ ftc → eliminando P e e
-    den_t = eta * abs(ftc_kPa) - fst_kPa  # = η·|ftc| - fst
+    # Eq. 6.10 — fibra superior: C1 (serv. topo) + C3 (ato topo)
+    den_t = eta * ftt_kPa + fsc_abs_kPa    # η·ftt + |fsc|
     zt_req = delta_M / den_t if den_t > 1e-12 else 0.0
+
+    # Eq. 6.9 — fibra inferior: C2 (serv. fundo) + C4 (ato fundo)
+    den_b = fst_kPa + eta * ftc_abs_kPa    # fst + η·|ftc|
+    zb_req = delta_M / den_b if den_b > 1e-12 else 0.0
 
     return zt_req, zb_req
 
@@ -52,19 +61,22 @@ def presize_simplified(Ms: float, eta: float, limits) -> tuple:
     """
     Critério simplificado — Eq. 6.13 do manual.
 
-    Calcula o módulo seccional mínimo considerando somente o momento de
-    serviço total Ms e o limite de compressão em serviço fsc.
+    Estimativa conservadora baseada no momento de cargas variáveis + permanentes
+    adicionais (Ms = Mse − Msw) e no limite de compressão no ato de transferência.
+
+    Usa |ftc| = 0,7·fckj (limite no ato) e não |fsc| = 0,7·fck (serviço),
+    pois fckj ≤ fck → |ftc| ≤ |fsc|, tornando |ftc| o denominador limitante.
 
     Args:
-        Ms:     momento total de serviço na seção crítica (kN·m)
+        Ms:     momento de cargas sem peso próprio (kN·m) = Mse − Msw
         eta:    Ps/Pt (não utilizado, mantido por compatibilidade)
         limits: instância de StressLimits
 
     Returns:
         (zt_req, zb_req) em m³ — iguais para seção simétrica.
     """
-    fsc_kPa = abs(limits.fsc) * 1000.0  # kPa
-    z_req = Ms / fsc_kPa if fsc_kPa > 1e-12 else 0.0
+    ftc_abs_kPa = abs(limits.ftc) * 1000.0  # |ftc| = 0,7·fckj (kPa)
+    z_req = Ms / ftc_abs_kPa if ftc_abs_kPa > 1e-12 else 0.0
     return z_req, z_req  # seção simétrica: zt = zb
 
 
