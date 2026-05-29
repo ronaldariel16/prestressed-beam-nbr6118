@@ -57,15 +57,18 @@ try:
     Msw = abs(support.M_uniform(x_crit, pp))
     Mgk = abs(support.M_uniform(x_crit, loads.gk))
     Mqk = abs(support.M_uniform(x_crit, loads.qk))
-    Mse = Msw + Mgk + Mqk
+    Mse = Msw + Mgk + Mqk            # momento total de servicio (incluye PP)
+    Ms  = Mgk + Mqk                  # momento sin peso propio (= Mse − Msw), para Eq. 6.13
 
     eta = estado.beta / estado.alpha if estado.alpha > 0 else 0.83
     lim = stress_limits(conc)
     b   = estado.b
 
     # ── Cálculo de los dos criterios ─────────────────────────────────────
+    # General (Eqs. 6.9/6.10): usa Mse completo y Msw por separado
     zt_gen, zb_gen  = presize_general(Mse, Msw, eta, lim)
-    zt_sim, zb_sim  = presize_simplified(Mse, eta, lim)
+    # Simplificado (Eq. 6.13): usa Ms = Mse − Msw (cargas sin PP)
+    zt_sim, zb_sim  = presize_simplified(Ms, eta, lim)
 
     h_gen = min_height_rectangular(b, zt_gen, zb_gen)
     h_sim = min_height_rectangular(b, zt_sim, zb_sim)
@@ -79,17 +82,18 @@ try:
     with col_izq:
         st.subheader("Datos de entrada")
         st.markdown(
-            f"| Parámetro | Valor |\n"
-            f"|-----------|-------|\n"
-            f"| Ancho b | **{b*100:.1f} cm** |\n"
-            f"| Msw (peso propio) | **{Msw:.2f} kN·m** |\n"
-            f"| Mgk (carga perm.) | **{Mgk:.2f} kN·m** |\n"
-            f"| Mqk (sobrecarga) | **{Mqk:.2f} kN·m** |\n"
-            f"| Mse (total serv.) | **{Mse:.2f} kN·m** |\n"
-            f"| η = Ps/Pt | **{eta:.3f}** |\n"
-            f"| fsc | **{lim.fsc:.2f} MPa** |\n"
-            f"| ftt | **{lim.ftt:.2f} MPa** |\n"
-            f"| ftc | **{lim.ftc:.2f} MPa** |"
+            f"| Parámetro | Valor | Nota |\n"
+            f"|-----------|-------|------|\n"
+            f"| Ancho b | **{b*100:.1f} cm** | |\n"
+            f"| Msw (peso propio) | **{Msw:.2f} kN·m** | |\n"
+            f"| Mgk (carga perm.) | **{Mgk:.2f} kN·m** | sin PP |\n"
+            f"| Mqk (sobrecarga)  | **{Mqk:.2f} kN·m** | |\n"
+            f"| Mse = Msw+Mgk+Mqk | **{Mse:.2f} kN·m** | total serviço |\n"
+            f"| Ms = Mgk+Mqk | **{Ms:.2f} kN·m** | Eq. 6.13 (sin PP) |\n"
+            f"| η = Ps/Pt | **{eta:.3f}** | |\n"
+            f"| fsc | **{lim.fsc:.2f} MPa** | |\n"
+            f"| ftt | **{lim.ftt:.2f} MPa** | |\n"
+            f"| ftc | **{lim.ftc:.2f} MPa** | |"
         )
 
         st.divider()
