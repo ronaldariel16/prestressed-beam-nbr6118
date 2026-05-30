@@ -293,16 +293,99 @@ try:
 
                 # Verificación tramo a tramo
                 from src.tendon_profile import verify_profile
+                from src.presizing import round_up_to_step
+                import pandas as pd
+
                 e_p_interp = np.interp(x_z, x_p, e_p)
                 ok_arr = verify_profile(e_p_interp, e_min_z, e_max_z)
                 n_fuera = int(np.sum(~ok_arr))
+
                 if n_fuera == 0:
                     st.success("✅ El perfil propuesto está **dentro** de la zona admisible.")
                 else:
                     st.error(
-                        f"❌ El perfil sale de la zona admisible en {n_fuera} punto(s).  \n"
-                        "Considera cambiar el tipo de perfil o ajustar e_real."
+                        f"❌ El perfil sale de la zona admisible en **{n_fuera} punto(s)** "
+                        f"del total de {len(ok_arr)}. "
+                        "e_real excede el límite superior de la zona admisible, "
+                        "lo que indica que la sección actual no puede acomodar "
+                        "los cordones con la excentricidad requerida por el Magnel."
                     )
+
+                    # ── Tabla comparativa de opciones de n ────────────────
+                    st.markdown("#### Diagnóstico — comparativa de n cordones")
+
+                    filas_comp = []
+                    alguno_valido = False
+                    for n_try in range(max(1, n - 2), n + 5):
+                        Pj_t  = n_try * steel.Pj_lim_unit()
+                        Ps_t  = Pj_t * estado.beta
+                        pos_t, e_t = arrange_strands(
+                            n_try, sec,
+                            cover=cover, spacing=spacing,
+                            diameter_strand=diam_m,
+                        )
+                        invPs_t = 1.0 / Ps_t if Ps_t > 0 else 0.0
+                        en_t = is_in_feasible_region(
+                            e_t, invPs_t, sec, Msw, Mse, eta, lim
+                        )
+                        if en_t:
+                            alguno_valido = True
+                        n_cam_t = len(set(round(y, 4) for y in pos_t))
+                        y_bar_t = sec.yb - e_t
+                        filas_comp.append({
+                            "n": n_try,
+                            "Pj (kN)":   f"{Pj_t:.1f}",
+                            "Ps (kN)":   f"{Ps_t:.1f}",
+                            "Camadas":   n_cam_t,
+                            "y_CG (cm)": f"{y_bar_t * 100:.2f}",
+                            "e_real (m)": f"{e_t:.4f}",
+                            "En region": "✅" if en_t else "❌",
+                        })
+
+                    df_comp = pd.DataFrame(filas_comp)
+                    st.dataframe(
+                        df_comp, use_container_width=True, hide_index=True,
+                        column_config={
+                            "n":          st.column_config.NumberColumn("n", width="small"),
+                            "En region":  st.column_config.TextColumn("Magnel ✓/✗", width="small"),
+                        },
+                    )
+
+                    if alguno_valido:
+                        n_ok = next(
+                            f["n"] for f in filas_comp if f["En region"] == "✅"
+                        )
+                        st.success(
+                            f"✅ Con **n = {n_ok} cordones** el punto (e_real, 1/Ps) "
+                            f"entra en la región factible. Cambia n a {n_ok} arriba."
+                        )
+                    else:
+                        # La sección es insuficiente para todos los n probados
+                        h_nuevo = round_up_to_step(estado.h + 0.10, 0.05)
+                        st.error(
+                            f"**La sección actual (h = {estado.h * 100:.0f} cm) es "
+                            f"insuficiente** para acomodar los cordones con la "
+                            f"excentricidad requerida por el Magnel, independientemente "
+                            f"del número de cordones.  \n\n"
+                            f"Con 2 camadas de cordones la excentricidad física mínima "
+                            f"alcanzable es ≈ {e_real:.3f} m, que supera siempre el "
+                            f"límite superior de la zona admisible (condición C2 de Magnel)."
+                        )
+                        st.info(
+                            f"**Solución recomendada:** aumentar h a "
+                            f"**{h_nuevo * 100:.0f} cm** en Página 1 y recalcular "
+                            f"desde Predimensionamiento.  \n"
+                            f"Con mayor h la región factible de Magnel se amplía y "
+                            f"el perfil parabólico cabrá dentro de la zona admisible."
+                        )
+                        if st.button(
+                            f"↩ Volver a Página 1 con h = {h_nuevo * 100:.0f} cm",
+                            type="primary",
+                            help=f"Actualiza h a {h_nuevo:.2f} m y regresa a Geometría y Materiales.",
+                        ):
+                            estado.h = h_nuevo
+                            guardar_estado(estado)
+                            st.switch_page("pages/1_📐_Geometría_y_Materiales.py")
 
                 fig_perf.update_layout(
                     xaxis=dict(title="Posición x (m)", gridcolor="#EEEEEE"),
