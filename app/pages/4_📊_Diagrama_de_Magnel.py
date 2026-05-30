@@ -153,7 +153,7 @@ try:
                 help="Fuerza de pretensado en servicio a verificar (kN).",
             )
 
-    # ── Región factible ───────────────────────────────────────────────
+    # ── Región factible (para visualización) ─────────────────────────
     e_arr, lower, upper, valid = feasible_region(
         sec, Msw, Mse, eta, lim,
         e_range=(e_min_val, e_max_geo),
@@ -163,6 +163,8 @@ try:
     factible = bool(np.any(valid))
 
     # ── Selección del punto de diseño ─────────────────────────────────
+    # select_design_point trabaja sobre cotas crudas (sin clipping)
+    # y garantiza que el punto esté DENTRO de la región (lo < up estricto).
     resultado = None
     punto_en_region = False
 
@@ -170,13 +172,21 @@ try:
         if e_manual is not None and Ps_manual is not None and Ps_manual > 0:
             invPs_man = 1.0 / Ps_manual
             resultado = (e_manual, invPs_man, Ps_manual)
-            if factible:
-                punto_en_region = is_in_feasible_region(
-                    e_manual, invPs_man, e_arr, lower, upper
-                )
-    elif factible:
-        resultado = select_design_point(e_arr, lower, upper, valid, strategy=estrategia)
-        punto_en_region = True  # select_design_point siempre devuelve puntos dentro de la región
+            punto_en_region = is_in_feasible_region(
+                e_manual, invPs_man, sec, Msw, Mse, eta, lim
+            )
+    else:
+        resultado = select_design_point(
+            sec, Msw, Mse, eta, lim,
+            e_min=float(e_min_val), e_max=float(e_max_geo),
+            strategy=estrategia, n_pts=1000,
+        )
+        # select_design_point solo devuelve puntos con lo < up (interior)
+        if resultado is not None:
+            e_d, invPs_d, _ = resultado
+            punto_en_region = is_in_feasible_region(
+                e_d, invPs_d, sec, Msw, Mse, eta, lim
+            )
 
     # ── Panel de resultado (columna izquierda) ────────────────────────
     with col_param:
