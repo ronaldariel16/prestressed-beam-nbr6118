@@ -53,6 +53,7 @@ try:
     from src.reinforcement import number_of_strands, arrange_strands
     from src.tendon_profile import parabolic_profile, straight_profile, admissible_zone
     from src.stress_limits import stress_limits
+    from src.magnel import is_in_feasible_region
 
     conc    = estado.get_concrete()
     sec     = estado.get_section()
@@ -63,6 +64,18 @@ try:
     lim = stress_limits(conc)
     Pj  = estado.Pj
     Ps  = Pj * estado.beta
+
+    # Momentos en la sección crítica (para verificación de Magnel)
+    pp = sec.A * conc.gamma_concrete
+    x_crit, _ = support.critical_sections()[0]
+    Msw = abs(support.M_uniform(x_crit, pp))
+    Mgk = abs(support.M_uniform(x_crit, loads.gk))
+    Mqk = abs(support.M_uniform(x_crit, loads.qk))
+    Mse = Msw + Mgk + Mqk
+    eta = estado.beta / estado.alpha if estado.alpha > 0 else 0.83
+
+    # Diámetro real del cordón en metros
+    diam_m = steel.diameter / 1000.0
 
     col_izq, col_der = st.columns([1, 1.6], gap="medium")
 
@@ -78,64 +91,124 @@ try:
             key="_ni_n_strands",
             help=(
                 f"Número mínimo calculado: n = ⌈Pj / Pj,lim⌉ = "
-                f"⌈{Pj:.1f} / {steel.Pj_lim_unit():.2f}⌉ = {n_calc}. "
-                "Puede aumentarse para reducir la excentricidad real."
+                f"⌈{Pj:.1f} / {steel.Pj_lim_unit():.2f}⌉ = {n_calc}.  \n"
+                "Puede ajustarse para modificar la excentricidad real."
             ),
         )
         estado.n_strands = n
 
-        # Verificación de fuerza
         Pj_real = n * steel.Pj_lim_unit()
+        Ps_real = Pj_real * estado.beta
         Aps_total = n * steel.Aps_unit_mm2
-        st.metric("Pj real (n cordones)", f"{Pj_real:.1f} kN",
-                  delta=f"{(Pj_real - Pj):.1f} kN sobre el requerido")
+
+        st.metric(
+            "Pj real (n cordones)",
+            f"{Pj_real:.1f} kN",
+            delta=f"{(Pj_real - Pj):.1f} kN sobre Pj requerido",
+            help=f"Pj_real = n × Pj,lim = {n} × {steel.Pj_lim_unit():.2f} kN",
+        )
 
         st.divider()
         st.subheader("2. Disposición en la sección")
 
         cover = st.number_input(
-            "Recubrimiento c (m)", 0.02, 0.10, 0.04, 0.005,
+            "Recubrimiento nominal c (m)", 0.02, 0.10, 0.04, 0.005,
             format="%.3f", key="_ni_cover_arm",
-            help="Distancia del eje del cordón al borde de la sección (m).",
+            help=(
+                "Distancia del borde de la sección al eje del cordón (m).  \n"
+                "NBR 6118:2014 §7.4.7: mínimo según clase de agressividad (CAA)."
+            ),
         )
         spacing = st.number_input(
-            "Espaciado entre ejes (m)", 0.03, 0.15, 0.05, 0.005,
+            "Espaciado libre entre cordones s (m)", 0.02, 0.15, 0.05, 0.005,
             format="%.3f", key="_ni_spacing_arm",
-            help="Espaciado mínimo entre ejes de cordones en la misma camada (m). "
-                 "NBR 6118:2014 §18.6.2.3: mínimo 3·Ø o 20 mm.",
+            help=(
+                "Distancia libre (clear) entre las superficies de cordones adyacentes (m).  \n"
+                "NBR 6118:2014 §18.6.2.3: mínimo 3·Ø o 20 mm.  \n"
+                f"Para Ø {steel.diameter:.1f} mm: mín = max(3×{steel.diameter:.1f}={3*steel.diameter:.0f} mm, 20 mm) "
+                f"= {max(3*steel.diameter, 20):.0f} mm = {max(3*steel.diameter/1000, 0.02):.3f} m."
+            ),
         )
 
-        positions, e_real = arrange_strands(n, sec, cover=cover, spacing=spacing)
+        # Llamar con el diámetro real del cordón
+        positions, e_real = arrange_strands(
+            n, sec,
+            cover=cover,
+            spacing=spacing,
+            diameter_strand=diam_m,
+        )
         estado.e_real = e_real
 
         n_camadas = len(set(round(y, 4) for y in positions))
+        y_baricentro = sec.yb - e_real
+
         st.markdown(
             f"- **Camadas:** {n_camadas}  \n"
-            f"- **Baricentro** (desde base): {(sec.yb - e_real)*100:.1f} cm  \n"
+            f"- **Baricentro** (desde base): **{y_baricentro*100:.2f} cm**  \n"
             f"- **Excentricidad real** e_real: **{e_real:.4f} m**  \n"
-            f"- **Aps total** = {n} × {steel.Aps_unit_mm2:.1f} = **{Aps_total:.1f} mm²**"
+            f"- **Aps total** = {n} × {steel.Aps_unit_mm2:.1f} = **{Aps_total:.1f} mm²**  \n"
+            f"- **Ps real** = {Pj_real:.1f} × {estado.beta:.3f} = **{Ps_real:.1f} kN**"
         )
 
-        if abs(e_real - (estado.e or 0)) > 0.01:
-            st.warning(
-                f"⚠️ La excentricidad real ({e_real:.4f} m) difiere "
-                f"de la de diseño ({estado.e:.4f} m). "
-                "Esto puede afectar la verificación de tensiones."
+        # ── Verificación de consistencia e_real vs diseño ────────────────
+        st.divider()
+        e_diseno = estado.e or 0.0
+        e_max_geo = sec.yb - cover   # límite geométrico inferior
+
+        if e_real > e_max_geo:
+            st.error(
+                f"❌ **e_real ({e_real:.4f} m) excede el límite geométrico "
+                f"({e_max_geo:.4f} m).**  \n"
+                "El cable saldría de la sección. Aumenta n para distribuir en más "
+                "camadas, reduce el diámetro o aumenta la cobertura."
             )
 
+        else:
+            # Verificar si el punto real está en la región factible de Magnel
+            invPs_real = 1.0 / Ps_real if Ps_real > 0 else 0.0
+            en_region = is_in_feasible_region(
+                e_real, invPs_real, sec, Msw, Mse, eta, lim
+            )
+
+            if en_region:
+                st.success(
+                    f"✅ El punto real **(e = {e_real:.4f} m, Ps = {Ps_real:.0f} kN)** "
+                    f"está **dentro** de la región factible de Magnel.  \n"
+                    "Puede guardar este diseño o actualizar el punto de diseño en Página 4 "
+                    f"con e ≈ {e_real:.3f} m."
+                )
+            elif abs(e_real - e_diseno) > 0.005:
+                st.warning(
+                    f"⚠️ La excentricidad real **({e_real:.4f} m)** difiere del punto "
+                    f"de Magnel **({e_diseno:.4f} m)** y el punto real está **fuera** "
+                    f"de la región factible (Ps_real = {Ps_real:.0f} kN).  \n\n"
+                    f"**Opción A:** Reducir a **{max(1, n-1)} cordones** → menor e_real "
+                    f"y menor Pj_real → puede que el punto entre en la región.  \n"
+                    f"**Opción B:** Ir a **Página 4** y seleccionar un nuevo punto de "
+                    f"diseño con e ≈ {e_real:.3f} m."
+                )
+            else:
+                st.success(
+                    f"✅ e_real ({e_real:.4f} m) ≈ e_diseño ({e_diseno:.4f} m). "
+                    "Disposición coherente con el punto de Magnel."
+                )
+
         st.divider()
-        st.subheader("3. Tipo de perfil")
+        st.subheader("3. Tipo de perfil del tendón")
         perfil_tipo = st.selectbox(
-            "Tipo de perfil del tendón",
+            "Tipo de perfil",
             options=["parabolico", "recto"],
             index=0 if estado.profile_type == "parabolico" else 1,
             format_func=lambda x: {
-                "parabolico": "Parabólico (máx e en el centro)",
-                "recto":      "Recto (e constante)",
+                "parabolico": "Parabólico (e_max en el centro del vano)",
+                "recto":      "Recto (e constante a lo largo del vano)",
             }[x],
             key="_sel_perfil",
-            help="Perfil parabólico: óptimo para viga simplemente apoyada con carga uniforme. "
-                 "Perfil recto: más simple, usado en pretracción.",
+            help=(
+                "Perfil parabólico: óptimo para viga simplemente apoyada bajo carga uniforme; "
+                "minimiza las pérdidas por fricción y maximiza la contraflecha.  \n"
+                "Perfil recto: más simple, habitual en pretracción."
+            ),
         )
         estado.profile_type = perfil_tipo
 
@@ -149,14 +222,14 @@ try:
         guardar_estado(estado)
 
     with col_der:
-        tab_sec, tab_perfil = st.tabs(["📐 Sección con cordones", "📈 Perfil a lo largo de la viga"])
+        tab_sec, tab_perfil = st.tabs([
+            "📐 Sección con cordones",
+            "📈 Perfil a lo largo de la viga",
+        ])
 
         with tab_sec:
             st.markdown("#### Sección transversal con cordones posicionados")
-            # Convertir posiciones (y desde base, x centrado) → (y_desde_base, x)
-            cordones_plot = []
-            for y in positions:
-                cordones_plot.append((y, sec.b / 2))  # simplificación: centrados
+            cordones_plot = [(y, sec.b / 2) for y in positions]
 
             fig_sec = dibujar_seccion_transversal(
                 b=sec.b, h=sec.h,
@@ -165,8 +238,10 @@ try:
             )
             st.pyplot(fig_sec, use_container_width=True)
             st.caption(
-                f"Los {n} cordones están distribuidos en {n_camadas} camada(s). "
-                f"Recubrimiento nominal c = {cover*100:.0f} cm."
+                f"{n} cordones Ø {steel.diameter:.1f} mm distribuidos en "
+                f"{n_camadas} camada(s). "
+                f"Recubrimiento c = {cover*100:.0f} cm. "
+                f"Espaciado libre s = {spacing*100:.0f} mm."
             )
 
         with tab_perfil:
@@ -174,11 +249,10 @@ try:
 
             try:
                 x_z, e_min_z, e_max_z = admissible_zone(
-                    sec, conc, loads, support, Ps, lim,
+                    sec, conc, loads, support, Ps_real, lim,
                     cover_bottom=cover, cover_top=cover,
                 )
 
-                # Perfil propuesto
                 if perfil_tipo == "parabolico":
                     x_p, e_p = parabolic_profile(e_real, support.L, e_end=0.0)
                 else:
@@ -186,7 +260,7 @@ try:
 
                 fig_perf = go.Figure()
 
-                # Zona admisible (banda verde)
+                # Zona admisible
                 fig_perf.add_trace(go.Scatter(
                     x=np.concatenate([x_z, x_z[::-1]]),
                     y=np.concatenate([e_max_z, e_min_z[::-1]]),
@@ -217,18 +291,21 @@ try:
                     hovertemplate="x=%{x:.2f} m<br>e=%{y:.4f} m<extra></extra>",
                 ))
 
-                # Verificación
+                # Verificación tramo a tramo
                 from src.tendon_profile import verify_profile
                 e_p_interp = np.interp(x_z, x_p, e_p)
                 ok_arr = verify_profile(e_p_interp, e_min_z, e_max_z)
-                n_fuera = np.sum(~ok_arr)
+                n_fuera = int(np.sum(~ok_arr))
                 if n_fuera == 0:
                     st.success("✅ El perfil propuesto está **dentro** de la zona admisible.")
                 else:
-                    st.error(f"❌ El perfil sale de la zona admisible en {n_fuera} punto(s).")
+                    st.error(
+                        f"❌ El perfil sale de la zona admisible en {n_fuera} punto(s).  \n"
+                        "Considera cambiar el tipo de perfil o ajustar e_real."
+                    )
 
                 fig_perf.update_layout(
-                    xaxis=dict(title="Posición a lo largo de la viga x (m)", gridcolor="#EEEEEE"),
+                    xaxis=dict(title="Posición x (m)", gridcolor="#EEEEEE"),
                     yaxis=dict(title="Excentricidad e (m)", gridcolor="#EEEEEE"),
                     plot_bgcolor="white",
                     paper_bgcolor="white",
